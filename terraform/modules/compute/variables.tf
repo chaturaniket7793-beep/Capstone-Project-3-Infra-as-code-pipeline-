@@ -51,3 +51,7 @@ variable "desired_count" {
   type        = number
   default     = 2
 }
+variable "target_group_arn" {
+  description = "ARN of the ALB target group"
+  type        = string
+}

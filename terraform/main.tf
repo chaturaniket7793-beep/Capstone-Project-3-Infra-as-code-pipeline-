@@ -35,10 +35,12 @@ module "compute" {
   ecs_security_group_id = module.security.ecs_security_group_id
   execution_role_arn    = module.iam.ecs_task_execution_role_arn
   ecr_repository_url    = module.ecr.repository_url
-  container_port        = 5000
-  cpu                   = 256
-  memory                = 512
-  desired_count         = 2
+  target_group_arn      = module.load_balancer.target_group_arn
+
+  container_port = 5000
+  cpu            = 256
+  memory         = 512
+  desired_count  = 2
 }
 module "load_balancer" {
   source = "./modules/load-balancer"
