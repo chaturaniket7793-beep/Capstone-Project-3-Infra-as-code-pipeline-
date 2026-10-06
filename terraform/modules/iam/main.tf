@@ -63,10 +63,10 @@ resource "aws_iam_role" "github_actions" {
   })
 
   tags = {
-    Name      = "GitHubActions-ECS-ZeroTouch"
-    Project   = var.project_name
+    Name        = "GitHubActions-ECS-ZeroTouch"
+    Project     = var.project_name
     Environment = var.environment
-    ManagedBy = "Terraform"
+    ManagedBy   = "Terraform"
   }
 }
 
