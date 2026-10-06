@@ -55,6 +55,7 @@ resource "aws_iam_role" "github_actions" {
               "repo:chaturaniket7793-beep@285134284/Capstone-Project-3-Infra-as-code-pipeline-@1407084997:ref:refs/heads/staging",
               "repo:chaturaniket7793-beep@285134284/Capstone-Project-3-Infra-as-code-pipeline-@1407084997:ref:refs/heads/main",
               "repo:chaturaniket7793-beep@285134284/Capstone-Project-3-Infra-as-code-pipeline-@1407084997:pull_request"
+              "repo:chaturaniket7793-beep@285134284/Capstone-Project-3-Infra-as-code-pipeline-@1407084997:environment:production"
             ]
           }
         }
