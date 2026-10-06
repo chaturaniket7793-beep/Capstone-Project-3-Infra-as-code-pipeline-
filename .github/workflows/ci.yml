@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 
 on:
   pull_request:
@@ -9,6 +9,7 @@ on:
       - main
 
 jobs:
+
   terraform:
     name: Terraform Validation
     runs-on: ubuntu-latest
@@ -34,9 +35,10 @@ jobs:
         working-directory: terraform
         run: terraform validate
 
+
   docker:
     if: github.event_name == 'push'
-    name: Docker Build
+    name: Docker Build and Push
     runs-on: ubuntu-latest
     needs: terraform
 
@@ -55,13 +57,12 @@ jobs:
           aws-region: ap-south-1
 
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Docker Image
         run: docker build -t ecs-zero-touch-app:${{ github.sha }} .
 
-      - name: Push Docker Image to ECR
+      - name: Push Docker Image
         env:
           ECR_REGISTRY: 501479502035.dkr.ecr.ap-south-1.amazonaws.com
           ECR_REPOSITORY: ecs-zero-touch-dev
@@ -69,3 +70,103 @@ jobs:
         run: |
           docker tag ecs-zero-touch-app:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
           docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+
+  staging:
+    if: github.ref == 'refs/heads/staging'
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: docker
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::501479502035:role/GitHubActions-ECS-ZeroTouch
+          aws-region: ap-south-1
+
+      - name: Deploy to ECS Staging
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+          TASK_FAMILY: ecs-zero-touch-dev
+          IMAGE: 501479502035.dkr.ecr.ap-south-1.amazonaws.com/ecs-zero-touch-dev:${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition)
+
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
+            --arg IMAGE "$IMAGE" \
+            '.containerDefinitions[0].image=$IMAGE |
+             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --task-definition $NEW_ARN
+
+          aws ecs wait services-stable \
+            --cluster $CLUSTER \
+            --services $SERVICE
+
+
+  production:
+    if: github.ref == 'refs/heads/main'
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: docker
+
+    environment:
+      name: production
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::501479502035:role/GitHubActions-ECS-ZeroTouch
+          aws-region: ap-south-1
+
+      - name: Deploy to ECS Production
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+          TASK_FAMILY: ecs-zero-touch-dev
+          IMAGE: 501479502035.dkr.ecr.ap-south-1.amazonaws.com/ecs-zero-touch-dev:${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition)
+
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
+            --arg IMAGE "$IMAGE" \
+            '.containerDefinitions[0].image=$IMAGE |
+             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --task-definition $NEW_ARN
+
+          aws ecs wait services-stable \
+            --cluster $CLUSTER \
+            --services $SERVICE
+'@ | Set-Content .\.github\workflows\ci.yml
