@@ -59,4 +59,13 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Docker Image
-        run: docker build -t ecs-zero-touch-app:test .
+        run: docker build -t ecs-zero-touch-app:${{ github.sha }} .
+
+      - name: Push Docker Image to ECR
+        env:
+          ECR_REGISTRY: 501479502035.dkr.ecr.ap-south-1.amazonaws.com
+          ECR_REPOSITORY: ecs-zero-touch-dev
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker tag ecs-zero-touch-app:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
