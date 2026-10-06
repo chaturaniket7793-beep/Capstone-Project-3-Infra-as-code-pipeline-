@@ -4,9 +4,9 @@ on:
   pull_request:
   push:
     branches:
+      - feature/github-actions
       - staging
       - main
-
 jobs:
   terraform:
     name: Terraform Validation
