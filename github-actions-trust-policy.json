@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::501479502035:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": [
+            "repo:chaturaniket7793-beep/Capstone-Project-3-Infra-as-code-pipeline-:ref:refs/heads/feature/github-actions",
+            "repo:chaturaniket7793-beep/Capstone-Project-3-Infra-as-code-pipeline-:ref:refs/heads/staging",
+            "repo:chaturaniket7793-beep/Capstone-Project-3-Infra-as-code-pipeline-:ref:refs/heads/main",
+            "repo:chaturaniket7793-beep/Capstone-Project-3-Infra-as-code-pipeline-:pull_request"
+          ]
+        }
+      }
+    }
+  ]
+}
