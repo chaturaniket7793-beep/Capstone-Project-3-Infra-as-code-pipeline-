@@ -18,7 +18,6 @@ resource "aws_ecs_cluster" "this" {
   }
 }
 
-
 # -------------------------
 # CloudWatch Log Group
 # -------------------------
@@ -34,7 +33,6 @@ resource "aws_cloudwatch_log_group" "ecs" {
     ManagedBy   = "Terraform"
   }
 }
-
 
 # -------------------------
 # ECS Task Definition
@@ -83,6 +81,11 @@ resource "aws_ecs_task_definition" "this" {
     ManagedBy   = "Terraform"
   }
 }
+
+# -------------------------
+# ECS Service
+# -------------------------
+
 resource "aws_ecs_service" "this" {
   name            = "${var.project_name}-${var.environment}-service"
   cluster         = aws_ecs_cluster.this.id
@@ -91,6 +94,12 @@ resource "aws_ecs_service" "this" {
   desired_count = var.desired_count
 
   launch_type = "FARGATE"
+
+  lifecycle {
+    ignore_changes = [
+      task_definition
+    ]
+  }
 
   network_configuration {
     subnets = var.private_subnet_ids
