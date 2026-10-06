@@ -4,6 +4,7 @@ module "networking" {
   project_name = var.project_name
   environment  = var.environment
 }
+
 module "security" {
   source = "./modules/security"
 
@@ -11,4 +12,11 @@ module "security" {
   environment  = var.environment
   vpc_id       = module.networking.vpc_id
   app_port     = 5000
+}
+
+module "ecr" {
+  source = "./modules/ecr"
+
+  project_name = var.project_name
+  environment  = var.environment
 }
