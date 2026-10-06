@@ -169,4 +169,4 @@ jobs:
           aws ecs wait services-stable \
             --cluster $CLUSTER \
             --services $SERVICE
-'@ | Set-Content .\.github\workflows\ci.yml
+
