@@ -1,4 +1,6 @@
 terraform {
+  required_version = ">= 1.15.3"
+
   backend "s3" {
     bucket         = "ecs-zero-touch-terraform-state"
     key            = "ecs-zero-touch/terraform.tfstate"
