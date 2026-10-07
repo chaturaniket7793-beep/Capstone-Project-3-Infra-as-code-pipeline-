@@ -10,6 +10,9 @@ on:
 
 jobs:
 
+  # ============================================================
+  # 1. TERRAFORM VALIDATION + LINT
+  # ============================================================
   terraform:
     name: Terraform Validation
     runs-on: ubuntu-latest
@@ -35,12 +38,60 @@ jobs:
         working-directory: terraform
         run: terraform validate
 
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v5
 
-  docker:
-    if: github.event_name == 'push'
-    name: Docker Build and Push
+      - name: Run TFLint
+        working-directory: terraform
+        run: |
+          tflint --init
+          tflint
+
+
+    # ============================================================
+  # 2. APPLICATION TEST
+  # ============================================================
+  test:
+    name: Application Tests
     runs-on: ubuntu-latest
     needs: terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: app
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run application tests
+        working-directory: app
+        run: |
+          python -m py_compile app.py
+  # ============================================================
+  # 3. DOCKER BUILD + ECR PUSH
+  # ============================================================
+  docker:
+    name: Docker Build and Push
+    runs-on: ubuntu-latest
+    needs:
+      - terraform
+      - test
+
+    # Run for normal pushes OR PRs targeting staging
+    if: |
+      github.event_name == 'push' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.base_ref == 'staging'
+      )
 
     permissions:
       id-token: write
@@ -60,7 +111,10 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Docker Image
-        run: docker build -t ecs-zero-touch-app:${{ github.sha }} .
+        run: |
+          docker build \
+            -t ecs-zero-touch-app:${{ github.sha }} \
+            .
 
       - name: Push Docker Image
         env:
@@ -68,15 +122,32 @@ jobs:
           ECR_REPOSITORY: ecs-zero-touch-dev
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker tag ecs-zero-touch-app:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          docker tag \
+            ecs-zero-touch-app:${IMAGE_TAG} \
+            ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+          docker push \
+            ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
 
 
+  # ============================================================
+  # 4. DEPLOY TO STAGING
+  # ============================================================
   staging:
-    if: github.ref == 'refs/heads/staging'
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: docker
+
+    # PR targeting staging OR push to staging
+    if: |
+      (
+        github.event_name == 'pull_request' &&
+        github.base_ref == 'staging'
+      ) ||
+      (
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/staging'
+      )
 
     permissions:
       id-token: write
@@ -89,43 +160,167 @@ jobs:
           role-to-assume: arn:aws:iam::501479502035:role/GitHubActions-ECS-ZeroTouch
           aws-region: ap-south-1
 
-      - name: Deploy to ECS Staging
+      # --------------------------------------------------------
+      # Capture current task definition for rollback
+      # --------------------------------------------------------
+      - name: Get Previous Task Definition
+        id: previous
         env:
           CLUSTER: ecs-zero-touch-dev-cluster
           SERVICE: ecs-zero-touch-dev-service
+        run: |
+          PREVIOUS_TASK_DEF=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          echo "Previous task definition: $PREVIOUS_TASK_DEF"
+
+          echo "task_definition=$PREVIOUS_TASK_DEF" >> "$GITHUB_OUTPUT"
+
+
+      # --------------------------------------------------------
+      # Register new ECS task definition
+      # --------------------------------------------------------
+      - name: Register New Task Definition
+        id: deploy
+        env:
           TASK_FAMILY: ecs-zero-touch-dev
           IMAGE: 501479502035.dkr.ecr.ap-south-1.amazonaws.com/ecs-zero-touch-dev:${{ github.sha }}
         run: |
           TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition $TASK_FAMILY \
-            --query taskDefinition)
+            --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition')
 
           NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
             --arg IMAGE "$IMAGE" \
             '.containerDefinitions[0].image=$IMAGE |
-             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+             del(
+               .taskDefinitionArn,
+               .revision,
+               .status,
+               .requiresAttributes,
+               .compatibilities,
+               .registeredAt,
+               .registeredBy
+             )')
 
           NEW_ARN=$(aws ecs register-task-definition \
             --cli-input-json "$NEW_TASK_DEF" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
 
+          echo "New task definition: $NEW_ARN"
+
+          echo "task_definition=$NEW_ARN" >> "$GITHUB_OUTPUT"
+
+
+      # --------------------------------------------------------
+      # Update ECS service
+      # --------------------------------------------------------
+      - name: Deploy to ECS Staging
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+          NEW_TASK_DEF: ${{ steps.deploy.outputs.task_definition }}
+        run: |
           aws ecs update-service \
-            --cluster $CLUSTER \
-            --service $SERVICE \
-            --task-definition $NEW_ARN
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$NEW_TASK_DEF"
+
+          echo "Staging deployment started."
+
+
+      # --------------------------------------------------------
+      # Wait maximum 5 minutes
+      # --------------------------------------------------------
+      - name: Wait for Staging Deployment
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+        run: |
+          if ! timeout 300 aws ecs wait services-stable \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE"; then
+
+            echo "Staging deployment failed or exceeded 5 minutes."
+            exit 1
+          fi
+
+          echo "Staging deployment became stable."
+
+
+      # --------------------------------------------------------
+      # Verify staging health
+      # --------------------------------------------------------
+      - name: Verify Staging Health
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+        run: |
+          RUNNING=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --query 'services[0].runningCount' \
+            --output text)
+
+          DESIRED=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --query 'services[0].desiredCount' \
+            --output text)
+
+          echo "Running tasks: $RUNNING"
+          echo "Desired tasks: $DESIRED"
+
+          if [ "$RUNNING" -ne "$DESIRED" ]; then
+            echo "Staging health check failed."
+            exit 1
+          fi
+
+          echo "Staging health check passed."
+
+
+      # --------------------------------------------------------
+      # Rollback staging if any previous step failed
+      # --------------------------------------------------------
+      - name: Rollback Staging
+        if: failure()
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+          PREVIOUS_TASK_DEF: ${{ steps.previous.outputs.task_definition }}
+        run: |
+          echo "Starting staging rollback..."
+          echo "Rolling back to: $PREVIOUS_TASK_DEF"
+
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$PREVIOUS_TASK_DEF"
 
           aws ecs wait services-stable \
-            --cluster $CLUSTER \
-            --services $SERVICE
+            --cluster "$CLUSTER" \
+            --services "$SERVICE"
+
+          echo "Staging rollback completed."
 
 
+  # ============================================================
+  # 5. DEPLOY TO PRODUCTION
+  # ============================================================
   production:
-    if: github.ref == 'refs/heads/main'
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: docker
 
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+
+    # GitHub Environment provides manual approval
     environment:
       name: production
 
@@ -140,33 +335,150 @@ jobs:
           role-to-assume: arn:aws:iam::501479502035:role/GitHubActions-ECS-ZeroTouch
           aws-region: ap-south-1
 
-      - name: Deploy to ECS Production
+
+      # --------------------------------------------------------
+      # Capture current production task definition
+      # --------------------------------------------------------
+      - name: Get Previous Production Task Definition
+        id: previous
         env:
           CLUSTER: ecs-zero-touch-dev-cluster
           SERVICE: ecs-zero-touch-dev-service
+        run: |
+          PREVIOUS_TASK_DEF=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          echo "Previous production task definition: $PREVIOUS_TASK_DEF"
+
+          echo "task_definition=$PREVIOUS_TASK_DEF" >> "$GITHUB_OUTPUT"
+
+
+      # --------------------------------------------------------
+      # Register production task definition
+      # --------------------------------------------------------
+      - name: Register Production Task Definition
+        id: deploy
+        env:
           TASK_FAMILY: ecs-zero-touch-dev
           IMAGE: 501479502035.dkr.ecr.ap-south-1.amazonaws.com/ecs-zero-touch-dev:${{ github.sha }}
         run: |
           TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition $TASK_FAMILY \
-            --query taskDefinition)
+            --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition')
 
           NEW_TASK_DEF=$(echo "$TASK_DEF" | jq \
             --arg IMAGE "$IMAGE" \
             '.containerDefinitions[0].image=$IMAGE |
-             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+             del(
+               .taskDefinitionArn,
+               .revision,
+               .status,
+               .requiresAttributes,
+               .compatibilities,
+               .registeredAt,
+               .registeredBy
+             )')
 
           NEW_ARN=$(aws ecs register-task-definition \
             --cli-input-json "$NEW_TASK_DEF" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
 
+          echo "New production task definition: $NEW_ARN"
+
+          echo "task_definition=$NEW_ARN" >> "$GITHUB_OUTPUT"
+
+
+      # --------------------------------------------------------
+      # Deploy production
+      # --------------------------------------------------------
+      - name: Deploy to ECS Production
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+          NEW_TASK_DEF: ${{ steps.deploy.outputs.task_definition }}
+        run: |
           aws ecs update-service \
-            --cluster $CLUSTER \
-            --service $SERVICE \
-            --task-definition $NEW_ARN
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$NEW_TASK_DEF"
+
+          echo "Production deployment started."
+
+
+      # --------------------------------------------------------
+      # Wait maximum 5 minutes
+      # --------------------------------------------------------
+      - name: Wait for Production Deployment
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+        run: |
+          if ! timeout 300 aws ecs wait services-stable \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE"; then
+
+            echo "Production deployment failed or exceeded 5 minutes."
+            exit 1
+          fi
+
+          echo "Production deployment became stable."
+
+
+      # --------------------------------------------------------
+      # Verify production health
+      # --------------------------------------------------------
+      - name: Verify Production Health
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+        run: |
+          RUNNING=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --query 'services[0].runningCount' \
+            --output text)
+
+          DESIRED=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --query 'services[0].desiredCount' \
+            --output text)
+
+          echo "Running tasks: $RUNNING"
+          echo "Desired tasks: $DESIRED"
+
+          if [ "$RUNNING" -ne "$DESIRED" ]; then
+            echo "Production health check failed."
+            exit 1
+          fi
+
+          echo "Production health check passed."
+
+
+      # --------------------------------------------------------
+      # Rollback production if deployment/health check fails
+      # --------------------------------------------------------
+      - name: Rollback Production
+        if: failure()
+        env:
+          CLUSTER: ecs-zero-touch-dev-cluster
+          SERVICE: ecs-zero-touch-dev-service
+          PREVIOUS_TASK_DEF: ${{ steps.previous.outputs.task_definition }}
+        run: |
+          echo "Starting production rollback..."
+          echo "Rolling back to: $PREVIOUS_TASK_DEF"
+
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$PREVIOUS_TASK_DEF"
 
           aws ecs wait services-stable \
-            --cluster $CLUSTER \
-            --services $SERVICE
+            --cluster "$CLUSTER" \
+            --services "$SERVICE"
 
+          echo "Production rollback completed."
