@@ -76,10 +76,7 @@ The platform also supports rollback when a production deployment fails its healt
                                            ▼
                                       Application
 
-                                   ┌────────────────┐
-                                   │   CloudWatch   │
-                                   │ Logs / Monitor │
-                                   └────────────────┘
+                                  
 ```
 
 ---
@@ -103,7 +100,7 @@ AWS VPC
 ├── Security Groups
 ├── Amazon ECR
 ├── IAM Roles
-└── CloudWatch Logs
+
 ```
 
 ### AWS services
@@ -118,7 +115,6 @@ AWS VPC
 | **ECS Fargate** | Runs containers |
 | **Amazon ECR** | Stores Docker images |
 | **IAM** | Access control |
-| **CloudWatch** | Logs and monitoring |
 | **S3** | Terraform remote state |
 | **DynamoDB** | Terraform state locking |
 
@@ -145,7 +141,7 @@ terraform/
 │   ├── iam/
 │   ├── ecs/
 │   ├── alb/
-│   └── monitoring/
+│   
 │
 └── environments/
     ├── dev/
@@ -163,7 +159,6 @@ terraform/
 - ECS cluster and service
 - ECS task definition
 - Application Load Balancer
-- CloudWatch logging
 - Remote Terraform state
 - Repeatable infrastructure provisioning
 
@@ -380,33 +375,7 @@ The target service supports multiple running tasks.
 
 Running multiple tasks provides basic service redundancy while autoscaling allows ECS to increase capacity when required.
 
----
 
-## 10. Monitoring and Observability
-
-Amazon CloudWatch provides application and container logging.
-
-```text
-ECS Fargate
-     │
-     ▼
-Container Logs
-     │
-     ▼
-CloudWatch Logs
-```
-
-Monitoring covers:
-
-- Application/container logs
-- ECS service health
-- Deployment status
-- Task failures
-- Operational troubleshooting
-
-Deployment health validation is also performed by the CI/CD workflow.
-
----
 
 ## 11. Repository Structure
 
@@ -443,8 +412,7 @@ Capstone-Project-3-Infra-as-code-pipeline/
 │   │   ├── iam/
 │   │   ├── ecs/
 │   │   ├── alb/
-│   │   └── monitoring/
-│   └── environments/
+│   │   └── environments/
 │
 ├── scripts/
 │   ├── build-image.sh
@@ -601,7 +569,6 @@ The architecture contains AWS services that can generate charges:
 - NAT Gateway
 - Application Load Balancer
 - ECS Fargate
-- CloudWatch
 - ECR
 - Data transfer
 
@@ -621,7 +588,6 @@ Unused development environments should be destroyed when they are no longer requ
 - Amazon ECS Fargate
 - Amazon ECR
 - Application Load Balancer
-- Amazon CloudWatch
 - Amazon S3
 - DynamoDB
 
@@ -658,7 +624,6 @@ Unused development environments should be destroyed when they are no longer requ
 - ECS Fargate
 - Amazon ECR
 - Application Load Balancer
-- CloudWatch
 - GitHub OIDC
 - Production approvals
 - Health checks
@@ -686,7 +651,7 @@ The project eliminates manual SSH-based production deployments and provides a **
 - HTTPS with ACM
 - Route 53 custom domain
 - Multi-account AWS architecture
-
+- Cloudwatch
 ---
 
 ## Project Summary
